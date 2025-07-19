@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-FAST TREE-BASED OPTIMIZED AMERICAN EXPRESS CAMPUS CHALLENGE 2025 SOLUTION
-========================================================================
-Aims for high AUC with LightGBM, XGBoost, CatBoost ensemble (no TabNet for speed).
-Expected runtime: 20-40 minutes on your i9-14900K.
+ULTIMATE OPTIMIZED AMERICAN EXPRESS CAMPUS CHALLENGE 2025 SOLUTION
+==================================================================
+Aims for AUC >0.99999 with full data, advanced features, Optuna tuning, and 4-model stacking ensemble.
+Uses LightGBM, XGBoost, CatBoost, and TabNet with regularization to avoid overfitting.
 """
 
 import pandas as pd
@@ -22,16 +22,18 @@ from sklearn.ensemble import StackingClassifier
 import gc
 from datetime import datetime
 import dask.dataframe as dd
-import optuna
-import traceback  # FIXED: Imported traceback for error handling
+from pytorch_tabnet.tab_model import TabNetClassifier
+import torch
+import optuna  # For hyperparameter tuning
 
+# Suppress warnings
 warnings.filterwarnings('ignore')
 pd.set_option('display.max_columns', None)
 
-print("🚀 FAST TREE-BASED SOLUTION FOR HIGH AUC")
+print("🚀 ULTIMATE OPTIMIZED SOLUTION FOR AUC >0.99999")
 print("=" * 80)
-print("✅ LightGBM + XGBoost + CatBoost ensemble (no TabNet for quick leaderboard check)!")
-print("✅ Reduced tuning for 20-40 min runtime on your i9-14900K!")
+print("✅ Full 6.3M data aggregation, advanced features, Optuna tuning!")
+print("✅ 4-model stacking ensemble with regularization for rank 1!")
 print("=" * 80)
 
 class OptimizedAmexSolution:
@@ -41,11 +43,12 @@ class OptimizedAmexSolution:
         self.additional_dfs = {}
         self.target_col = None
         self.feature_cols = []
-        self.models = []
+        self.models = []  # For ensemble
         self.predictions = None
         self.scaler = StandardScaler()
         
     def safe_read_parquet(self, filename, use_dask=False):
+        """Safely read large parquet with Dask option"""
         try:
             if os.path.exists(filename):
                 if use_dask:
@@ -64,24 +67,41 @@ class OptimizedAmexSolution:
             return None
     
     def inspect_dataframe(self, df, name):
+        """Inspect dataframe structure safely"""
         if df is None:
             return
-        print(f"\n📊 Inspecting {name}: Shape {df.shape}, Columns: {list(df.columns)}")
+        
+        print(f"\n📊 Inspecting {name}:")
+        print(f"   Shape: {df.shape}")
+        print(f"   Columns: {list(df.columns)}")
+        print(f"   Data types:")
+        for col in df.columns:
+            dtype = str(df[col].dtype)
+            null_count = df[col].isnull().sum()
+            print(f"     {col}: {dtype} (nulls: {null_count})")
     
     def aggregate_additional_data(self, df, filename):
+        """Aggregate large data for features - dynamically detect group column and columns"""
         if df is None:
             return pd.DataFrame()
         
         try:
             if isinstance(df, dd.DataFrame):
-                df = df.compute()
+                df = df.compute()  # Convert to pandas for aggregation
             
+            # Dynamically find possible group column (customer ID like)
             common_group_cols = ['id2', 'customer_id', 'user_id', 'cid', 'customer']
-            group_col = next((col for col in common_group_cols if col in df.columns), None)
+            group_col = None
+            for possible_col in common_group_cols:
+                if possible_col in df.columns:
+                    group_col = possible_col
+                    print(f"✅ Found group column '{group_col}' in {filename}")
+                    break
             if group_col is None:
                 print(f"⚠  No group column found in {filename}")
                 return pd.DataFrame()
             
+            # Dynamically find numeric and categorical columns
             num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             cat_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
             
@@ -89,6 +109,7 @@ class OptimizedAmexSolution:
             for col in num_cols:
                 if col != group_col:
                     aggs[col] = ['count', 'mean', 'sum', 'max', 'min', 'std']
+            
             for col in cat_cols:
                 if col != group_col:
                     aggs[col] = ['nunique']
@@ -100,16 +121,19 @@ class OptimizedAmexSolution:
             agg_df = df.groupby(group_col).agg(aggs).reset_index()
             agg_df.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in agg_df.columns.values]
             
+            # Rename group_col to 'id2' for consistent merging
             if group_col != 'id2':
                 agg_df = agg_df.rename(columns={group_col: 'id2'})
             
             print(f"✅ Aggregated {filename} shape: {agg_df.shape}")
+            print(f"   Aggregated columns: {list(agg_df.columns)}")
             return agg_df
         except Exception as e:
             print(f"⚠  Error aggregating {filename}: {e}")
             return pd.DataFrame()
     
     def load_all_data(self):
+        """Load FULL data including large additional files"""
         print("\n📂 Loading FULL data...")
         
         self.train_df = self.safe_read_parquet('train_data.parquet')
@@ -226,64 +250,98 @@ class OptimizedAmexSolution:
         return 'synthetic_target'
     
     def create_bulletproof_features(self):
-        print("\n🛠  Creating features...")
+        print("\n🛠  Creating advanced features...")
         
         for df_name, df in [('train', self.train_df), ('test', self.test_df)]:
             if df is None:
                 continue
             
+            print(f"🛠  Processing {df_name} data...")
+            
+            # 1. Datetime features
             date_cols = df.select_dtypes(include=['datetime64']).columns
             for col in date_cols:
                 try:
+                    df[f'{col}_year'] = df[col].dt.year
                     df[f'{col}_month'] = df[col].dt.month
+                    df[f'{col}_day'] = df[col].dt.day
+                    df[f'{col}_hour'] = df[col].dt.hour
                     df[f'{col}_dayofweek'] = df[col].dt.dayofweek
-                except:
-                    pass
+                    df[f'{col}_is_weekend'] = (df[col].dt.dayofweek >= 5).astype(int)
+                    print(f"   ✅ Created datetime features for {col}")
+                except Exception as e:
+                    print(f"   ⚠  Error creating datetime features for {col}: {e}")
             
+            # 2. Numeric features and row stats
             numeric_cols = df.select_dtypes(include=[np.number]).columns
             numeric_cols = [col for col in numeric_cols if col != self.target_col]
             
             if len(numeric_cols) > 1:
-                df['row_mean'] = df[numeric_cols].mean(axis=1)
-                df['row_std'] = df[numeric_cols].std(axis=1)
+                try:
+                    df['row_mean'] = df[numeric_cols].mean(axis=1)
+                    df['row_std'] = df[numeric_cols].std(axis=1)
+                    df['row_max'] = df[numeric_cols].max(axis=1)
+                    df['row_min'] = df[numeric_cols].min(axis=1)
+                    df['row_sum'] = df[numeric_cols].sum(axis=1)
+                    print(f"   ✅ Created row-wise statistics features")
+                except Exception as e:
+                    print(f"   ⚠  Error creating row statistics: {e}")
             
+            # 3. Categorical encoding for low cardinality
             cat_cols = df.select_dtypes(include=['object', 'category']).columns
-            cat_cols = [col for col in cat_cols if col not in ['id1'] and df[col].nunique() < 20]
+            cat_cols = [col for col in cat_cols if col not in ['id1']]
             
             for col in cat_cols:
-                le = LabelEncoder()
-                df[f'{col}_encoded'] = le.fit_transform(df[col].astype(str).fillna('missing'))
+                try:
+                    if df[col].nunique() < 50:
+                        le = LabelEncoder()
+                        df[f'{col}_encoded'] = le.fit_transform(df[col].astype(str).fillna('missing'))
+                        print(f"   ✅ Encoded categorical feature {col}")
+                except Exception as e:
+                    print(f"   ⚠  Error encoding {col}: {e}")
             
-            id_cols = [col for col in df.columns if 'id' in col.lower() and col != 'id1' and df[col].nunique() < 10000]
+            # 4. ID frequency
+            id_cols = [col for col in df.columns if 'id' in col.lower() and col != 'id1']
             for col in id_cols:
-                freq_map = df[col].value_counts().to_dict()
-                df[f'{col}_frequency'] = df[col].map(freq_map)
+                try:
+                    freq_map = df[col].value_counts().to_dict()
+                    df[f'{col}_frequency'] = df[col].map(freq_map)
+                    print(f"   ✅ Created frequency feature for {col}")
+                except Exception as e:
+                    print(f"   ⚠  Error creating frequency feature for {col}: {e}")
             
+            # 5. Advanced interactions (from aggregates)
             if 'amount_mean' in df.columns and 'event_count' in df.columns:
                 df['spend_event_ratio'] = df['amount_mean'] / (df['event_count'] + 1)
+                print(f"   ✅ Created spend_event_ratio")
             
             if 'id5' in df.columns and pd.api.types.is_datetime64_any_dtype(df['id5']):
                 current_date = datetime.now()
                 df['days_since_event'] = (current_date - df['id5']).dt.days
+                print(f"   ✅ Created days_since_event")
         
         gc.collect()
     
     def prepare_features(self):
-        print("\n🎯 Preparing features...")
+        """Prepare final feature set with scaling"""
+        print("\n🎯 Preparing final features...")
         
         if self.train_df is None:
             print("❌ No training data!")
             return
         
-        exclude_cols = ['id1', self.target_col, 'id2', 'id3', 'id5']
+        exclude_cols = ['id1', self.target_col, 'id2', 'id3', 'id5']  # Exclude IDs from features
         
         self.feature_cols = [col for col in self.train_df.columns 
                              if col not in exclude_cols and self.train_df[col].dtype in ['float64', 'int64', 'float32', 'int32']]
         
-        self.feature_cols = [col for col in self.feature_cols if self.train_df[col].isnull().mean() < 0.95]
+        # Remove high-null columns
+        self.feature_cols = [col for col in self.feature_cols 
+                             if self.train_df[col].isnull().mean() < 0.95]
         
         print(f"✅ Selected {len(self.feature_cols)} features")
         
+        # Fill NaNs and scale
         for col in self.feature_cols:
             self.train_df[col] = self.train_df[col].fillna(0)
             if col in self.test_df.columns:
@@ -297,7 +355,8 @@ class OptimizedAmexSolution:
         gc.collect()
     
     def tune_model(self, trial, X, y, model_type):
-        cv = StratifiedKFold(n_splits=2)
+        """Optuna objective for tuning individual models"""
+        cv = StratifiedKFold(n_splits=3)
         scores = []
         
         if model_type == 'lgb':
@@ -338,6 +397,16 @@ class OptimizedAmexSolution:
             }
             model = cb.CatBoostClassifier(**params, random_state=42, verbose=0, task_type='GPU' if torch.cuda.is_available() else 'CPU')
         
+        elif model_type == 'tabnet':
+            params = {
+                'n_d': trial.suggest_int('n_d', 8, 64),
+                'n_a': trial.suggest_int('n_a', 8, 64),
+                'n_steps': trial.suggest_int('n_steps', 3, 10),
+                'gamma': trial.suggest_float('gamma', 1.0, 2.0),
+                'lambda_sparse': trial.suggest_float('lambda_sparse', 1e-5, 1e-3, log=True)
+            }
+            model = TabNetClassifier(**params, seed=42, device_name='cuda' if torch.cuda.is_available() else 'cpu')
+        
         for train_idx, val_idx in cv.split(X, y):
             X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
             y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
@@ -347,7 +416,8 @@ class OptimizedAmexSolution:
         return np.mean(scores)
     
     def train_model(self):
-        print("\n🚀 Training Tree Ensemble...")
+        """Train with Optuna tuning and stacking ensemble for max accuracy"""
+        print("\n🚀 Training with Optuna Tuning and Stacking Ensemble...")
         
         if not self.feature_cols:
             print("❌ No features!")
@@ -356,49 +426,49 @@ class OptimizedAmexSolution:
         X = self.train_df[self.feature_cols]
         y = self.train_df[self.target_col].astype(int)
         
-        # Downsample for tuning (10% for ultra speed)
-        sample_frac = 0.1
-        X_sample = X.sample(frac=sample_frac, random_state=42)
-        y_sample = y.loc[X_sample.index]
-        
-        # Class weights - FIXED: Use keyword arguments for compatibility
+        # Class weights for imbalance
         classes = np.unique(y)
         weights = compute_class_weight(class_weight='balanced', classes=classes, y=y)
         class_weights = dict(zip(classes, weights))
         
-        # Optuna tuning with reduced trials
-        optuna.logging.set_verbosity(optuna.logging.WARNING)
-        
+        # Optuna tuning for each model
         study_lgb = optuna.create_study(direction='maximize')
-        study_lgb.optimize(lambda trial: self.tune_model(trial, X_sample, y_sample, 'lgb'), n_trials=15, n_jobs=-1)
+        study_lgb.optimize(lambda trial: self.tune_model(trial, X, y, 'lgb'), n_trials=50)
         lgb_params = study_lgb.best_params
         
         study_xgb = optuna.create_study(direction='maximize')
-        study_xgb.optimize(lambda trial: self.tune_model(trial, X_sample, y_sample, 'xgb'), n_trials=15, n_jobs=-1)
+        study_xgb.optimize(lambda trial: self.tune_model(trial, X, y, 'xgb'), n_trials=50)
         xgb_params = study_xgb.best_params
         
         study_cat = optuna.create_study(direction='maximize')
-        study_cat.optimize(lambda trial: self.tune_model(trial, X_sample, y_sample, 'cat'), n_trials=15, n_jobs=-1)
+        study_cat.optimize(lambda trial: self.tune_model(trial, X, y, 'cat'), n_trials=50)
         cat_params = study_cat.best_params
         
-        # Train base models on full data
+        study_tab = optuna.create_study(direction='maximize')
+        study_tab.optimize(lambda trial: self.tune_model(trial, X, y, 'tabnet'), n_trials=50)
+        tab_params = study_tab.best_params
+        
+        # Train base models with tuned params
         base_models = [
-            ('lgb', lgb.LGBMClassifier(**lgb_params, class_weight=class_weights, random_state=42, verbosity=-1)),
-            ('xgb', xgb.XGBClassifier(**xgb_params, scale_pos_weight=weights[1]/weights[0] if len(weights) > 1 else 1, random_state=42)),
-            ('cat', cb.CatBoostClassifier(**cat_params, class_weights=weights, random_state=42, verbose=0))
+            ('lgb', lgb.LGBMClassifier(**lgb_params, class_weight=class_weights, random_state=42)),
+            ('xgb', xgb.XGBClassifier(**xgb_params, scale_pos_weight=weights[1]/weights[0], random_state=42)),
+            ('cat', cb.CatBoostClassifier(**cat_params, class_weights=weights, random_state=42, verbose=0)),
+            ('tab', TabNetClassifier(**tab_params, seed=42))
         ]
         
-        # Stacking ensemble with reduced CV
-        stacking_model = StackingClassifier(estimators=base_models, final_estimator=lgb.LGBMClassifier(random_state=42), cv=3, n_jobs=-1)
+        # Stacking ensemble
+        stacking_model = StackingClassifier(estimators=base_models, final_estimator=lgb.LGBMClassifier(random_state=42), cv=5, n_jobs=-1)
         
+        # Fit on full data for max accuracy
         stacking_model.fit(X, y)
         
         self.models.append(stacking_model)
-        print("✅ Tree ensemble trained")
+        print("✅ Stacking model trained with tuned params")
         
         gc.collect()
     
     def make_predictions(self):
+        """Make predictions with stacking ensemble"""
         print("\n🎯 Making predictions...")
         
         if not self.models:
@@ -412,6 +482,7 @@ class OptimizedAmexSolution:
         print(f"✅ Predictions ready: mean {self.predictions.mean():.4f}")
     
     def create_submission(self):
+        """Create submission file with variable id5"""
         print("\n📄 Creating submission file...")
         
         if self.predictions is None:
@@ -427,13 +498,14 @@ class OptimizedAmexSolution:
                 'pred': self.predictions
             })
             
-            submission.to_csv('FINAL_SUBMISSION_TREE.csv', index=False)
-            print(f"✅ Saved 'FINAL_SUBMISSION_TREE.csv' {submission.shape}")
+            submission.to_csv('FINAL_SUBMISSION.csv', index=False)
+            print(f"✅ Saved 'FINAL_SUBMISSION.csv' {submission.shape}")
             print(submission.head())
         except Exception as e:
             print(f"❌ Error: {e}")
     
     def run(self):
+        """Run the optimized pipeline"""
         try:
             self.load_all_data()
             self.inspect_dataframe(self.train_df, "Training Data")
@@ -444,10 +516,10 @@ class OptimizedAmexSolution:
             self.train_model()
             self.make_predictions()
             self.create_submission()
-            print("\n🎉 COMPLETE! Check leaderboard with 'FINAL_SUBMISSION_TREE.csv'!")
+            print("\n🎉 COMPLETE! Submission ready for rank 1!")
         except Exception as e:
             print(f"❌ Error: {e}")
-            traceback.print_exc()  # FIXED: Use traceback module for full error stack
+            traceback.print_exc()
 
 # Run it
 solution = OptimizedAmexSolution()
